@@ -302,28 +302,29 @@ class TwoClustersMIP(BaseModel):
                         self.u[(k, i, l + 1)] - self.u[(k, i, l)] >= self.EPS
                     )
 
-        # C5 - If x_j is prefered to y_j, then the utility function for cluster k of x_j is greater than the utility of y_j (with potential errors)
+        # C5 - Equivalence constraints on the delta_k_j variables. If x_j is prefered to y_j, then the utility function for cluster k of x_j is greater than the utility of y_j (with potential errors).
         for k in range(self.K):
             for j in range(self.P):
                 self.m.addConstr(
                     self.compute_score(k, X[j])
                     - self.sigma_plus_x[j]
                     + self.sigma_minus_x[j]
-                    >= self.compute_score(k, Y[j])
-                    - self.sigma_plus_y[j]
-                    + self.sigma_minus_y[j]
-                    + self.EPS
-                )
-
-        # C6 - Equivalent constraints on the delta_k_j variables
-        for k in range(self.K):
-            for j in range(self.P):
-                self.m.addConstr(
-                    self.compute_score(k, X[j]) - self.compute_score(k, Y[j])
+                    - (
+                        self.compute_score(k, Y[j])
+                        - self.sigma_plus_y[j]
+                        + self.sigma_minus_y[j]
+                    )
                     <= self.EPS + self.M * self.delta[(k, j)]
                 )
                 self.m.addConstr(
-                    self.compute_score(k, X[j]) - self.compute_score(k, Y[j])
+                    self.compute_score(k, X[j])
+                    - self.sigma_plus_x[j]
+                    + self.sigma_minus_x[j]
+                    - (
+                        self.compute_score(k, Y[j])
+                        - self.sigma_plus_y[j]
+                        + self.sigma_minus_y[j]
+                    )
                     >= self.EPS + self.M * (self.delta[(k, j)] - 1)
                 )
 
@@ -362,8 +363,11 @@ class TwoClustersMIP(BaseModel):
             (n_samples, n_clusters) array of decision function value for each cluster.
         """
         # To be completed
-        # Do not forget that this method is called in predict_preference (line 42) and therefor should return well-organized data for it to work.
-        return
+        # Do not forget that this method is called in predict_preference (line 42) and therefore should return well-organized data for it to work.
+        utilities = []
+        for k in range(self.K):
+            utilities.append(np.array([self.compute_score(k, x).getValue() for x in X]))
+        return np.stack(utilities, axis=1)
 
 
 class HeuristicModel(BaseModel):
