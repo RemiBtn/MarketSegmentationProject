@@ -369,19 +369,46 @@ class TwoClustersMIP(BaseModel):
 
 
 class HeuristicModel(BaseModel):
-    """Skeleton of MIP you have to write as the first exercise.
+    """Skeleton of the heuristic model.
     You have to encapsulate your code within this class that will be called for evaluation.
     """
 
-    def __init__(self):
+    def __init__(
+        self, n_clusters, n_pieces=5, max_iter=100, max_energy=1, temperature=1
+    ):
         """Initialization of the Heuristic Model."""
         self.seed = 123
-        self.models = self.instantiate()
+        # self.model = self.instantiate(L=n_pieces, K=n_clusters)
+        self.instantiate(
+            L=n_pieces,
+            K=n_clusters,
+            max_iter=max_iter,
+            max_energy=max_energy,
+            temperature=temperature,
+        )
 
-    def instantiate(self):
-        """Instantiation of the MIP Variables"""
+    def instantiate(self, L, K, max_iter, max_energy, temperature):
+        """Instantiation of the heuristic model variables"""
+        # To be completed
+        self.K = K
+        self.L = L
+        self.T = temperature
+        self.max_iter = max_iter
+        self.max_energy = max_energy
+        return
+
+    def get_neighbour(self):
+        """Returns a neighbour of the current state - To be completed."""
         # To be completed
         return
+
+    def compute_pairs_explained(self, state, X, Y):
+        """Returns the number of pairs explained by the current state - To be completed."""
+        # To be completed
+        return
+
+    def probability(self, neighbour_energy, energy):
+        return np.exp((neighbour_energy - energy) / self.T)
 
     def fit(self, X, Y):
         """Estimation of the parameters - To be completed.
@@ -394,7 +421,22 @@ class HeuristicModel(BaseModel):
             (n_samples, n_features) features of unchosen elements
         """
         # To be completed
-        return
+        self.P = X.shape[0]
+        self.n = X.shape[1]
+        self.state = np.zeros((self.K, self.n, self.L + 1), dtype=np.float32)
+        self.energy = self.compute_pairs_explained(self.state, X, Y)
+        self.iter = 0
+        while self.iter < self.max_iter and self.energy < self.max_energy:
+            neighbour = self.get_neighbour()
+            neighbour_energy = self.compute_pairs_explained(self.get_neighbour, X, Y)
+            if neighbour_energy > self.energy or np.random.rand() < self.probability(
+                neighbour_energy, self.energy
+            ):
+                self.state = neighbour
+                self.energy = neighbour_energy
+            self.iter += 1
+
+        return self.state
 
     def predict_utility(self, X):
         """Return Decision Function of the MIP for X. - To be completed.
