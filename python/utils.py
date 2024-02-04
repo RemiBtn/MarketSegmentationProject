@@ -28,9 +28,9 @@ def compute_scores(utility_functions, X, criteria_mins, criteria_maxs):
     return scores
 
 
-def prepare_XY(X, Y, criteria_mins, criteria_maxs):
-    X_bar = as_barycenters(X, criteria_mins, criteria_maxs)
-    Y_bar = as_barycenters(Y, criteria_mins, criteria_maxs)
+def prepare_XY(X, Y, criteria_mins, criteria_maxs, L):
+    X_bar = as_barycenters(X, criteria_mins, criteria_maxs, L)
+    Y_bar = as_barycenters(Y, criteria_mins, criteria_maxs, L)
     diff = X_bar - Y_bar
     diff_swapped_axes = np.moveaxis(diff, 0, -1)
     diff_swapped_axes = np.ascontiguousarray(diff_swapped_axes, dtype=np.float32)
@@ -42,13 +42,13 @@ def fast_explained_pairs(utility_functions, X_minus_Y_transp):
     _n, _Lp1, P = X_minus_Y_transp.shape
 
     utility_functions.shape = *batch_shape, K, n * Lp1
-    diff.shape = n * Lp1, P
+    X_minus_Y_transp.shape = n * Lp1, P
 
     scores_diffs = np.dot(utility_functions, X_minus_Y_transp)
     explained = np.any(scores_diffs > 0, axis=-2)
     n_explained = np.count_nonzero(explained, axis=-1)
 
     utility_functions.shape = *batch_shape, K, n, Lp1
-    diff.shape = n, Lp1, P
+    X_minus_Y_transp.shape = n, Lp1, P
 
     return n_explained
