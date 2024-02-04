@@ -4,6 +4,7 @@ from abc import abstractmethod
 
 import gurobipy as grb
 import numpy as np
+from utils import compute_scores
 
 
 class BaseModel(object):
@@ -362,10 +363,9 @@ class TwoClustersMIP(BaseModel):
         np.ndarray:
             (n_samples, n_clusters) array of decision function value for each cluster.
         """
-        utilities = []
-        for k in range(self.K):
-            utilities.append(np.array([self.compute_score(k, x).getValue() for x in X]))
-        return np.stack(utilities, axis=1)
+        return compute_scores(
+            self.utility_functions, X, self.criteria_mins, self.criteria_maxs
+        )
 
 
 class HeuristicModel(BaseModel):

@@ -138,3 +138,6 @@ dmypy.json
 # Secret files
 secrets/*
 !secrets/.gitkeep
+
+# Test script
+*/__main__.py
