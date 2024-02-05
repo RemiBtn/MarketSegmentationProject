@@ -370,6 +370,175 @@ class TwoClustersMIP(BaseModel):
         )
 
 
+class SubsetModel(BaseModel):
+    """Skeleton of MIP you have to write as the first exercise.
+    You have to encapsulate your code within this class that will be called for evaluation.
+    """
+
+    def __init__(self, n_pieces, n_clusters, n_samples=1_000, *, seed=123):
+        """Initialization of the Heuristic Model."""
+        self.seed = seed
+        self.model = self.instantiate(L=n_pieces, K=n_clusters, n_samples=n_samples)
+
+    def instantiate(self, L, K, n_samples):
+        """Instantiation of the MIP Variables - To be completed."""
+        model = grb.Model("Market Segmentation")
+        self.L = L
+        self.K = K
+        self.n_samples = n_samples
+        self.M = 2  # upper bound for our problem
+        return model
+
+    def compute_xl(self, min, max, l):
+        return min + l * (max - min) / self.L
+
+    def compute_score(self, k, instance):
+        scores = []
+        for i, x in enumerate(instance):
+            # score is equal to max score
+            if x == self.criteria_maxs[i]:
+                scores.append(self.u[k, i, self.L])
+                continue
+
+            # score is below min score or above max score (for new instances)
+            if x < self.criteria_mins[i]:
+                scores.append(0)
+                continue
+            if x > self.criteria_maxs[i]:
+                scores.append(self.u[k, i, self.L])
+                continue
+
+            # other scores
+            l = math.floor(
+                self.L
+                * (x - self.criteria_mins[i])
+                / (self.criteria_maxs[i] - self.criteria_mins[i])
+            )
+            x_l = self.compute_xl(self.criteria_mins[i], self.criteria_maxs[i], l)
+            x_l_plus_1 = self.compute_xl(
+                self.criteria_mins[i], self.criteria_maxs[i], l + 1
+            )
+            delta_x = x - x_l
+            slope = (self.u[k, i, l + 1] - self.u[k, i, l]) / (x_l_plus_1 - x_l)
+            scores.append(self.u[k, i, l] + slope * delta_x)
+
+        return grb.quicksum(scores)
+
+    def store_result(self):
+        self.utility_functions = np.zeros(
+            (self.K, self.n, self.L + 1), dtype=np.float32
+        )
+        for k in range(self.K):
+            for i in range(self.n):
+                for l in range(1, self.L + 1):
+                    self.utility_functions[k, i, l] = self.u[k, i, l].x
+
+    def fit(self, X, Y):
+        """Estimation of the parameters - To be completed.
+
+        Parameters
+        ----------
+        X: np.ndarray
+            (n_samples, n_features) features of elements preferred to Y elements
+        Y: np.ndarray
+            (n_samples, n_features) features of unchosen elements
+        """
+
+        np.random.seed(self.seed)
+        n_samples, n_features = X.shape
+
+        all_elements = np.concatenate([X, Y], axis=0)
+        self.criteria_mins = all_elements.min(axis=0)
+        self.criteria_maxs = all_elements.max(axis=0)
+
+        n_samples = min(n_samples, self.n_samples)
+        data = np.concatenate([X, Y], axis=1)
+        np.random.shuffle(data)
+        X = data[:n_samples, :n_features]
+        Y = data[:n_samples, n_features:]
+
+        self.P = X.shape[0]
+        self.n = X.shape[1]
+        self.EPS = 10 ** (-4)
+
+        self.delta = {
+            (k, j): self.model.addVar(name=f"delta_{k}_{j}", vtype=grb.GRB.BINARY)
+            for j in range(self.P)
+            for k in range(self.K)
+        }
+
+        self.u = {
+            (k, i, l): self.model.addVar(name=f"u_{k}_{i}_{l}", lb=0) if l else 0
+            for k in range(self.K)
+            for i in range(self.n)
+            for l in range(self.L + 1)
+        }
+        self.sigma = {j: self.model.addVar(name=f"s_{j}", lb=0) for j in range(self.P)}
+
+        # Constraints
+
+        # C1 - Each pair is explained by at least one cluster
+        for j in range(self.P):
+            self.model.addConstr(
+                grb.quicksum([self.delta[k, j] for k in range(self.K)]) >= 1
+            )
+
+        # C2 - The utility function for each cluster is modeled by a sum of piecewise linear functions being equal to 1
+        for k in range(self.K):
+            self.model.addConstr(
+                grb.quicksum([self.u[k, i, self.L] for i in range(self.n)]) == 1
+            )
+
+        # C3 - Each criterion is modeled by an increasing piecewise linear function
+        for k in range(self.K):
+            for i in range(self.n):
+                for l in range(self.L):
+                    self.model.addConstr(self.u[k, i, l + 1] - self.u[k, i, l] >= 0)
+
+        # C4 - delta_k_j implication
+        for k in range(self.K):
+            for j in range(self.P):
+                self.model.addConstr(
+                    self.compute_score(k, X[j])
+                    + self.sigma[j]
+                    - self.compute_score(k, Y[j])
+                    >= self.EPS + self.M * (self.delta[(k, j)] - 1)
+                )
+
+        # Objective
+        self.obj = grb.quicksum(list(self.sigma.values()))
+        self.model.setObjective(self.obj, grb.GRB.MINIMIZE)
+
+        self.model.params.outputflag = 0
+
+        self.model.update()
+
+        self.model.optimize()
+
+        assert self.model.status != grb.GRB.INFEASIBLE
+
+        self.store_result()
+
+        return self.model
+
+    def predict_utility(self, X):
+        """Return Decision Function of the MIP for X. - To be completed.
+
+        Parameters:
+        -----------
+        X: np.ndarray
+            (n_samples, n_features) list of features of elements
+
+        Returns
+        -------
+        np.ndarray:
+            (n_samples, n_clusters) array of decision function value for each cluster.
+        """
+        return compute_scores(
+            self.utility_functions, X, self.criteria_mins, self.criteria_maxs
+        )
+
+
 class SingleClusterModel:
     def __init__(
         self, n_features, n_pieces, criteria_min, criteria_max, *, epsilon=0.0001
