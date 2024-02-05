@@ -4,7 +4,8 @@ from abc import abstractmethod
 
 import gurobipy as grb
 import numpy as np
-from utils import compute_scores
+from sklearn.cluster import KMeans
+from utils import as_barycenters, compute_scores
 
 
 class BaseModel(object):
@@ -368,19 +369,80 @@ class TwoClustersMIP(BaseModel):
         )
 
 
-class HeuristicModel(BaseModel):
+class SingleClusterModel:
+    def __init__(
+        self, n_features, n_pieces, criteria_min, criteria_max, *, epsilon=0.0001
+    ):
+        self.n = n_features
+        self.L = n_pieces
+        self.criteria_min = criteria_min
+        self.criteria_max = criteria_max
+        self.epsilon = epsilon
+        self.result = None
+        self.model = grb.Model()
+        self.utilities = [
+            [self.model.addVar() if l else 0 for l in range(self.L + 1)]
+            for _ in range(self.n)
+        ]
+        for utility in self.utilities:
+            for i in range(self.L):
+                self.model.addConstr(utility[i + 1] >= utility[i])
+        self.model.addConstr(
+            grb.quicksum([utility[-1] for utility in self.utilities]) == 1
+        )
+
+    def store_result(self):
+        self.result = np.zeros((self.n, self.L + 1), dtype=np.float32)
+        for i in range(self.n):
+            for l in range(1, self.L + 1):
+                self.result[i, l] = self.utilities[i][l].x
+
+    def fit(self, X, Y):
+        P = X.shape[0]
+        X = as_barycenters(X, self.criteria_min, self.criteria_max, self.L).reshape(
+            (P, -1)
+        )
+        Y = as_barycenters(Y, self.criteria_min, self.criteria_max, self.L).reshape(
+            (P, -1)
+        )
+        utilities = [value for criterion in self.utilities for value in criterion]
+
+        errors = [self.model.addVar(lb=0) for _ in range(P)]
+        for x, y, err in zip(X, Y, errors):
+            x_utility = grb.quicksum(
+                [coef * value for coef, value in zip(x, utilities)]
+            )
+            y_utility = grb.quicksum(
+                [coef * value for coef, value in zip(y, utilities)]
+            )
+            self.model.addConstr(x_utility + err >= y_utility + self.epsilon)
+
+        objective = grb.quicksum(errors)
+        self.model.setObjective(objective, grb.GRB.MINIMIZE)
+        self.model.params.outputflag = 0
+        self.model.update()
+        self.model.optimize()
+
+        assert self.model.status != grb.GRB.INFEASIBLE
+
+        self.store_result()
+
+
+class KMeansModel(BaseModel):
     """Skeleton of MIP you have to write as the first exercise.
     You have to encapsulate your code within this class that will be called for evaluation.
     """
 
-    def __init__(self):
+    def __init__(self, n_pieces, n_clusters, *, seed=123):
         """Initialization of the Heuristic Model."""
-        self.seed = 123
-        self.models = self.instantiate()
+        self.seed = seed
+        self.L = n_pieces
+        self.K = n_clusters
+        self.criteria_min = None
+        self.criteria_max = None
+        self.result = None
 
     def instantiate(self):
-        """Instantiation of the MIP Variables"""
-        # To be completed
         return
 
     def fit(self, X, Y):
@@ -393,8 +455,25 @@ class HeuristicModel(BaseModel):
         Y: np.ndarray
             (n_samples, n_features) features of unchosen elements
         """
-        # To be completed
-        return
+        data = np.concatenate([X, Y], axis=1)
+        kmeans = KMeans(self.K, random_state=self.seed)
+        kmeans.fit(data)
+
+        all_elements = np.concatenate([X, Y], axis=0)
+        self.criteria_min = all_elements.min(axis=0)
+        self.criteria_max = all_elements.max(axis=0)
+
+        models = [
+            SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max)
+            for _ in range(self.K)
+        ]
+
+        for k, model in enumerate(models):
+            X_k = X[kmeans.labels_ == k]
+            Y_k = Y[kmeans.labels_ == k]
+            model.fit(X_k, Y_k)
+
+        self.result = np.stack([model.result for model in models], axis=0)
 
     def predict_utility(self, X):
         """Return Decision Function of the MIP for X. - To be completed.
@@ -409,6 +488,4 @@ class HeuristicModel(BaseModel):
         np.ndarray:
             (n_samples, n_clusters) array of decision function value for each cluster.
         """
-        # To be completed
-        # Do not forget that this method is called in predict_preference (line 42) and therefor should return well-organized data for it to work.
-        return
+        return compute_scores(self.result, X, self.criteria_min, self.criteria_max)
