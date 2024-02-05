@@ -5,6 +5,7 @@ from abc import abstractmethod
 import gurobipy as grb
 import numpy as np
 from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
 from utils import as_barycenters, compute_scores
 
 
@@ -397,7 +398,7 @@ class SingleClusterModel:
             for l in range(1, self.L + 1):
                 self.result[i, l] = self.utilities[i][l].x
 
-    def fit(self, X, Y):
+    def fit(self, X, Y, weights=None):
         P = X.shape[0]
         X = as_barycenters(X, self.criteria_min, self.criteria_max, self.L).reshape(
             (P, -1)
@@ -417,8 +418,12 @@ class SingleClusterModel:
             )
             self.model.addConstr(x_utility + err >= y_utility + self.epsilon)
 
-        objective = grb.quicksum(errors)
+        if weights is None:
+            objective = grb.quicksum(errors)
+        else:
+            objective = grb.quicksum([w * err for w, err in zip(weights, errors)])
         self.model.setObjective(objective, grb.GRB.MINIMIZE)
+
         self.model.params.outputflag = 0
         self.model.update()
         self.model.optimize()
@@ -472,6 +477,68 @@ class KMeansModel(BaseModel):
             X_k = X[kmeans.labels_ == k]
             Y_k = Y[kmeans.labels_ == k]
             model.fit(X_k, Y_k)
+
+        self.result = np.stack([model.result for model in models], axis=0)
+
+    def predict_utility(self, X):
+        """Return Decision Function of the MIP for X. - To be completed.
+
+        Parameters:
+        -----------
+        X: np.ndarray
+            (n_samples, n_features) list of features of elements
+
+        Returns
+        -------
+        np.ndarray:
+            (n_samples, n_clusters) array of decision function value for each cluster.
+        """
+        return compute_scores(self.result, X, self.criteria_min, self.criteria_max)
+
+
+class GaussianMixtureModel(BaseModel):
+    """Skeleton of MIP you have to write as the first exercise.
+    You have to encapsulate your code within this class that will be called for evaluation.
+    """
+
+    def __init__(self, n_pieces, n_clusters, *, seed=123):
+        """Initialization of the Heuristic Model."""
+        self.seed = seed
+        self.L = n_pieces
+        self.K = n_clusters
+        self.criteria_min = None
+        self.criteria_max = None
+        self.result = None
+
+    def instantiate(self):
+        return
+
+    def fit(self, X, Y):
+        """Estimation of the parameters - To be completed.
+
+        Parameters
+        ----------
+        X: np.ndarray
+            (n_samples, n_features) features of elements preferred to Y elements
+        Y: np.ndarray
+            (n_samples, n_features) features of unchosen elements
+        """
+        data = np.concatenate([X, Y], axis=1)
+        gaussian_mixture = GaussianMixture(self.K, random_state=self.seed)
+        gaussian_mixture.fit(data)
+        probabilities = gaussian_mixture.predict_proba(data)
+
+        all_elements = np.concatenate([X, Y], axis=0)
+        self.criteria_min = all_elements.min(axis=0)
+        self.criteria_max = all_elements.max(axis=0)
+
+        models = [
+            SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max)
+            for _ in range(self.K)
+        ]
+
+        for k, model in enumerate(models):
+            model.fit(X, Y, probabilities[:, k])
 
         self.result = np.stack([model.result for model in models], axis=0)
 
