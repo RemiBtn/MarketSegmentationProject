@@ -5,7 +5,8 @@ from abc import abstractmethod
 import gurobipy as grb
 import numpy as np
 from sklearn.cluster import KMeans
-from utils import as_barycenters, compute_scores
+from utils import as_barycenters, compute_scores, random_utility_dirichlet, random_utility_uniform
+import metrics
 
 
 class BaseModel(object):
@@ -433,7 +434,7 @@ class KMeansModel(BaseModel):
     You have to encapsulate your code within this class that will be called for evaluation.
     """
 
-    def __init__(self, n_pieces, n_clusters, *, seed=123):
+    def __init__(self, n_pieces, n_clusters, *, seed=42):
         """Initialization of the Heuristic Model."""
         self.seed = seed
         self.L = n_pieces
@@ -441,6 +442,7 @@ class KMeansModel(BaseModel):
         self.criteria_min = None
         self.criteria_max = None
         self.result = None
+        self.models = []
 
     def instantiate(self):
         return
@@ -475,6 +477,98 @@ class KMeansModel(BaseModel):
 
         self.result = np.stack([model.result for model in models], axis=0)
 
+    def fit_L2_iteration(self, X, Y, Z, iterations=100, h=10):
+        """Estimation of the parameters - To be completed.
+
+        Parameters
+        ----------
+        X: np.ndarray
+            (n_samples, n_features) features of elements preferred to Y elements
+        Y: np.ndarray
+            (n_samples, n_features) features of unchosen elements
+        """
+        pairs_explained = metrics.PairsExplained()
+        cluster_intersection = metrics.ClusterIntersection()
+        data = np.concatenate([X, Y], axis=1)
+        utilities_X, utilities_Y = np.zeros((X.shape[0], self.K)), np.zeros((X.shape[0], self.K))
+        utility_diffs = utilities_X - utilities_Y
+        all_elements = np.concatenate([X, Y], axis=0)
+        self.criteria_min = all_elements.min(axis=0)
+        self.criteria_max = all_elements.max(axis=0)
+        models = [
+                SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max)
+                for _ in range(self.K)
+            ]
+
+        print(f'Utility difference hyperparameter h={h}')
+
+        for iteration in range (iterations):
+            data = np.concatenate([X,Y,h*utility_diffs], axis=1)
+
+            kmeans = KMeans(self.K, random_state=self.seed)
+            kmeans.fit(data)
+
+            for k, model in enumerate(models):
+                X_k = X[kmeans.labels_ == k]
+                Y_k = Y[kmeans.labels_ == k]
+                model.fit(X_k, Y_k)
+
+            self.result = np.stack([model.result for model in models], axis=0)
+            
+            print(f'iteration {iteration} - Percentage of explained preferences :{100 * pairs_explained.from_model(self, X, Y)}')
+            print(f'iteration {iteration} - Percentage of preferences well regrouped into clusters: {100 * cluster_intersection.from_model(self, X, Y, Z)}')
+
+            utilities_X = self.predict_utility(X)
+            utilities_Y = self.predict_utility(Y)
+            utility_diffs = utilities_X - utilities_Y
+
+    def fit_utilities_iteration(self, X, Y, Z, iterations=100, initialization='randomXY'):
+        # Initialize random cluster and iterate to class custer according to the max of utility difference
+        all_elements = np.concatenate([X, Y], axis=0)
+        self.criteria_min = all_elements.min(axis=0)
+        self.criteria_max = all_elements.max(axis=0)
+        models = [SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max) for _ in range(self.K)]
+
+        if initialization == 'randomXY':
+            utilities_X, utilities_Y = np.random.rand(X.shape[0], self.K), np.random.rand(X.shape[0], self.K)
+            utility_diffs = utilities_X - utilities_Y
+            cluster_assignments = np.argmax(utility_diffs, axis=1)
+        
+        elif initialization == 'random_utility_dirichlet':
+            self.result = np.stack([random_utility_dirichlet(X.shape[1], self.L) for _ in range(self.K)])
+            utilities_X, utilities_Y = self.predict_utility(X), self.predict_utility(Y)
+            utility_diffs = utilities_X - utilities_Y
+            cluster_assignments = np.argmax(utility_diffs, axis=1)
+        
+        elif initialization == 'random_utility_uniform':
+            self.result = np.stack([random_utility_uniform(X.shape[1], self.L) for _ in range(self.K)])
+            utilities_X, utilities_Y = self.predict_utility(X), self.predict_utility(Y)
+            utility_diffs = utilities_X - utilities_Y
+            cluster_assignments = np.argmax(utility_diffs, axis=1)
+        
+        elif initialization == 'random_kmeans':
+            data = np.concatenate([X,Y], axis=1)
+            kmeans = KMeans(self.K, random_state=self.seed)
+            kmeans.fit(data)
+            cluster_assignments = kmeans.labels_
+
+        for iteration in range (iterations):
+            for k, model in enumerate(models):
+                X_k = X[cluster_assignments == k]
+                Y_k = Y[cluster_assignments == k]
+                model.fit(X_k, Y_k)
+            
+            self.result = np.stack([model.result for model in models], axis=0)
+
+            utilities_X, utilities_Y = self.predict_utility(X), self.predict_utility(Y)
+            utility_diffs = utilities_X - utilities_Y
+            
+            cluster_assignments = np.argmax(utility_diffs, axis=1)  
+            
+            # Log des performances à chaque itération
+            print(f'iteration {iteration} - Percentage of explained preferences: {100 * metrics.PairsExplained().from_model(self, X, Y)}')
+            print(f'iteration {iteration} - Percentage of preferences well regrouped into clusters: {100 * metrics.ClusterIntersection().from_model(self, X, Y, Z)}')
+
     def predict_utility(self, X):
         """Return Decision Function of the MIP for X. - To be completed.
 
@@ -489,3 +583,4 @@ class KMeansModel(BaseModel):
             (n_samples, n_clusters) array of decision function value for each cluster.
         """
         return compute_scores(self.result, X, self.criteria_min, self.criteria_max)
+

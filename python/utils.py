@@ -52,3 +52,19 @@ def fast_explained_pairs(utility_functions, X_minus_Y_transp):
     X_minus_Y_transp.shape = n, Lp1, P
 
     return n_explained
+
+def random_utility_dirichlet(n, L):
+    weights = np.random.dirichlet([1] * n)
+    utilities = np.random.uniform(0, weights[:, np.newaxis], size=(n, L + 1))
+    utilities[:, 0] = 0
+    utilities[:, L] = weights
+    utilities.sort()
+    return utilities
+
+def random_utility_uniform(n, L):
+    weights = np.random.dirichlet([L] * n)
+    utilities = np.random.uniform(0, weights[:, np.newaxis], size=(n, L + 1))
+    utilities[:, 0] = 0
+    utilities[:, L] = weights
+    utilities.sort()
+    return utilities
