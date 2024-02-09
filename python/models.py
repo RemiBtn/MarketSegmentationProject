@@ -3,6 +3,7 @@ import pickle
 from abc import abstractmethod
 
 import gurobipy as grb
+import metrics
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
@@ -754,9 +755,21 @@ class KMeansModel(BaseModel):
             cluster_assignments = np.argmax(utility_diffs, axis=1)
 
         elif initialization == "random_kmeans":
-            data = np.concatenate([X, Y], axis=1)
-            kmeans = KMeans(self.K, random_state=self.seed)
-            kmeans.fit(data)
+            all_elements = np.concatenate([X, Y], axis=0)
+            criteria_min = all_elements.min(axis=0)
+            criteria_max = all_elements.max(axis=0)
+            X_bar = as_barycenters(X, criteria_min, criteria_max, 5).reshape((-1, 60))
+            Y_bar = as_barycenters(Y, criteria_min, criteria_max, 5).reshape((-1, 60))
+
+            normal_vectors = X_bar - Y_bar
+            norms = np.linalg.norm(normal_vectors, axis=1, keepdims=True)
+            normal_vectors /= norms
+            mid_points = (X_bar + Y_bar) / 2
+            constants = np.sum(normal_vectors * mid_points, axis=1, keepdims=True)
+            hyperplanes = np.hstack([normal_vectors, constants])
+
+            kmeans = KMeans(self.K, n_init=100)
+            kmeans.fit(hyperplanes)
             cluster_assignments = kmeans.labels_
 
         for iteration in range(iterations):
