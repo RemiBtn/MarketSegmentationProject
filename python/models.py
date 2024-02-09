@@ -5,8 +5,13 @@ from abc import abstractmethod
 import gurobipy as grb
 import numpy as np
 from sklearn.cluster import KMeans
-from utils import as_barycenters, compute_scores, random_utility_dirichlet, random_utility_uniform
 from sklearn.mixture import GaussianMixture
+from utils import (
+    as_barycenters,
+    compute_scores,
+    random_utility_dirichlet,
+    random_utility_uniform,
+)
 
 
 class BaseModel(object):
@@ -630,9 +635,21 @@ class KMeansModel(BaseModel):
         Y: np.ndarray
             (n_samples, n_features) features of unchosen elements
         """
-        data = np.concatenate([X, Y], axis=1)
-        kmeans = KMeans(self.K, random_state=self.seed)
-        kmeans.fit(data)
+        all_elements = np.concatenate([X, Y], axis=0)
+        criteria_min = all_elements.min(axis=0)
+        criteria_max = all_elements.max(axis=0)
+        X_bar = as_barycenters(X, criteria_min, criteria_max, 5).reshape((-1, 60))
+        Y_bar = as_barycenters(Y, criteria_min, criteria_max, 5).reshape((-1, 60))
+
+        normal_vectors = X_bar - Y_bar
+        norms = np.linalg.norm(normal_vectors, axis=1, keepdims=True)
+        normal_vectors /= norms
+        mid_points = (X_bar + Y_bar) / 2
+        constants = np.sum(normal_vectors * mid_points, axis=1, keepdims=True)
+        hyperplanes = np.hstack([normal_vectors, constants])
+
+        kmeans = KMeans(self.K, n_init=100)
+        kmeans.fit(hyperplanes)
 
         all_elements = np.concatenate([X, Y], axis=0)
         self.criteria_min = all_elements.min(axis=0)
@@ -663,20 +680,22 @@ class KMeansModel(BaseModel):
         pairs_explained = metrics.PairsExplained()
         cluster_intersection = metrics.ClusterIntersection()
         data = np.concatenate([X, Y], axis=1)
-        utilities_X, utilities_Y = np.zeros((X.shape[0], self.K)), np.zeros((X.shape[0], self.K))
+        utilities_X, utilities_Y = np.zeros((X.shape[0], self.K)), np.zeros(
+            (X.shape[0], self.K)
+        )
         utility_diffs = utilities_X - utilities_Y
         all_elements = np.concatenate([X, Y], axis=0)
         self.criteria_min = all_elements.min(axis=0)
         self.criteria_max = all_elements.max(axis=0)
         models = [
-                SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max)
-                for _ in range(self.K)
-            ]
+            SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max)
+            for _ in range(self.K)
+        ]
 
-        print(f'Utility difference hyperparameter h={h}')
+        print(f"Utility difference hyperparameter h={h}")
 
-        for iteration in range (iterations):
-            data = np.concatenate([X,Y,h*utility_diffs], axis=1)
+        for iteration in range(iterations):
+            data = np.concatenate([X, Y, h * utility_diffs], axis=1)
 
             kmeans = KMeans(self.K, random_state=self.seed)
             kmeans.fit(data)
@@ -687,60 +706,79 @@ class KMeansModel(BaseModel):
                 model.fit(X_k, Y_k)
 
             self.result = np.stack([model.result for model in models], axis=0)
-            
-            print(f'iteration {iteration} - Percentage of explained preferences :{100 * pairs_explained.from_model(self, X, Y)}')
-            print(f'iteration {iteration} - Percentage of preferences well regrouped into clusters: {100 * cluster_intersection.from_model(self, X, Y, Z)}')
+
+            print(
+                f"iteration {iteration} - Percentage of explained preferences :{100 * pairs_explained.from_model(self, X, Y)}"
+            )
+            print(
+                f"iteration {iteration} - Percentage of preferences well regrouped into clusters: {100 * cluster_intersection.from_model(self, X, Y, Z)}"
+            )
 
             utilities_X = self.predict_utility(X)
             utilities_Y = self.predict_utility(Y)
             utility_diffs = utilities_X - utilities_Y
 
-    def fit_utilities_iteration(self, X, Y, Z, iterations=100, initialization='randomXY'):
+    def fit_utilities_iteration(
+        self, X, Y, Z, iterations=100, initialization="randomXY"
+    ):
         # Initialize random cluster and iterate to class custer according to the max of utility difference
         all_elements = np.concatenate([X, Y], axis=0)
         self.criteria_min = all_elements.min(axis=0)
         self.criteria_max = all_elements.max(axis=0)
-        models = [SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max) for _ in range(self.K)]
+        models = [
+            SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max)
+            for _ in range(self.K)
+        ]
 
-        if initialization == 'randomXY':
-            utilities_X, utilities_Y = np.random.rand(X.shape[0], self.K), np.random.rand(X.shape[0], self.K)
+        if initialization == "randomXY":
+            utilities_X, utilities_Y = np.random.rand(
+                X.shape[0], self.K
+            ), np.random.rand(X.shape[0], self.K)
             utility_diffs = utilities_X - utilities_Y
             cluster_assignments = np.argmax(utility_diffs, axis=1)
-        
-        elif initialization == 'random_utility_dirichlet':
-            self.result = np.stack([random_utility_dirichlet(X.shape[1], self.L) for _ in range(self.K)])
+
+        elif initialization == "random_utility_dirichlet":
+            self.result = np.stack(
+                [random_utility_dirichlet(X.shape[1], self.L) for _ in range(self.K)]
+            )
             utilities_X, utilities_Y = self.predict_utility(X), self.predict_utility(Y)
             utility_diffs = utilities_X - utilities_Y
             cluster_assignments = np.argmax(utility_diffs, axis=1)
-        
-        elif initialization == 'random_utility_uniform':
-            self.result = np.stack([random_utility_uniform(X.shape[1], self.L) for _ in range(self.K)])
+
+        elif initialization == "random_utility_uniform":
+            self.result = np.stack(
+                [random_utility_uniform(X.shape[1], self.L) for _ in range(self.K)]
+            )
             utilities_X, utilities_Y = self.predict_utility(X), self.predict_utility(Y)
             utility_diffs = utilities_X - utilities_Y
             cluster_assignments = np.argmax(utility_diffs, axis=1)
-        
-        elif initialization == 'random_kmeans':
-            data = np.concatenate([X,Y], axis=1)
+
+        elif initialization == "random_kmeans":
+            data = np.concatenate([X, Y], axis=1)
             kmeans = KMeans(self.K, random_state=self.seed)
             kmeans.fit(data)
             cluster_assignments = kmeans.labels_
 
-        for iteration in range (iterations):
+        for iteration in range(iterations):
             for k, model in enumerate(models):
                 X_k = X[cluster_assignments == k]
                 Y_k = Y[cluster_assignments == k]
                 model.fit(X_k, Y_k)
-            
+
             self.result = np.stack([model.result for model in models], axis=0)
 
             utilities_X, utilities_Y = self.predict_utility(X), self.predict_utility(Y)
             utility_diffs = utilities_X - utilities_Y
-            
-            cluster_assignments = np.argmax(utility_diffs, axis=1)  
-            
+
+            cluster_assignments = np.argmax(utility_diffs, axis=1)
+
             # Log des performances à chaque itération
-            print(f'iteration {iteration} - Percentage of explained preferences: {100 * metrics.PairsExplained().from_model(self, X, Y)}')
-            print(f'iteration {iteration} - Percentage of preferences well regrouped into clusters: {100 * metrics.ClusterIntersection().from_model(self, X, Y, Z)}')
+            print(
+                f"iteration {iteration} - Percentage of explained preferences: {100 * metrics.PairsExplained().from_model(self, X, Y)}"
+            )
+            print(
+                f"iteration {iteration} - Percentage of preferences well regrouped into clusters: {100 * metrics.ClusterIntersection().from_model(self, X, Y, Z)}"
+            )
 
     def predict_utility(self, X):
         """Return Decision Function of the MIP for X. - To be completed.
