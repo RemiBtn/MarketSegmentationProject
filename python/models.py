@@ -768,7 +768,7 @@ class KMeansModel(BaseModel):
             constants = np.sum(normal_vectors * mid_points, axis=1, keepdims=True)
             hyperplanes = np.hstack([normal_vectors, constants])
 
-            kmeans = KMeans(self.K, n_init=100)
+            kmeans = KMeans(self.K, n_init=100, random_state=self.seed)
             kmeans.fit(hyperplanes)
             cluster_assignments = kmeans.labels_
 
