@@ -5,6 +5,7 @@ from abc import abstractmethod
 import gurobipy as grb
 import metrics
 import numpy as np
+import scipy
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from utils import (
@@ -613,7 +614,7 @@ class KMeansModel(BaseModel):
     You have to encapsulate your code within this class that will be called for evaluation.
     """
 
-    def __init__(self, n_pieces, n_clusters, *, seed=42):
+    def __init__(self, n_pieces, n_clusters, *, seed=123):
         """Initialization of the Heuristic Model."""
         self.seed = seed
         self.L = n_pieces
@@ -758,18 +759,24 @@ class KMeansModel(BaseModel):
             all_elements = np.concatenate([X, Y], axis=0)
             criteria_min = all_elements.min(axis=0)
             criteria_max = all_elements.max(axis=0)
-            X_bar = as_barycenters(X, criteria_min, criteria_max, 5).reshape((-1, 60))
-            Y_bar = as_barycenters(Y, criteria_min, criteria_max, 5).reshape((-1, 60))
+            X_bar = as_barycenters(X, criteria_min, criteria_max, 5)
+            Y_bar = as_barycenters(Y, criteria_min, criteria_max, 5)
 
-            normal_vectors = X_bar - Y_bar
+            kernel_basis = np.linalg.svd(np.ones((1, L + 1))).Vh[1:]
+            X_free = X_bar.dot(kernel_basis.T).reshape((-1, 50))
+            Y_free = Y_bar.dot(kernel_basis.T).reshape((-1, 50))
+
+            normal_vectors = X_free - Y_free
             norms = np.linalg.norm(normal_vectors, axis=1, keepdims=True)
             normal_vectors /= norms
-            mid_points = (X_bar + Y_bar) / 2
-            constants = np.sum(normal_vectors * mid_points, axis=1, keepdims=True)
-            hyperplanes = np.hstack([normal_vectors, constants])
+
+            scalar_product = np.einsum("ki,kj->ij", normal_vectors, normal_vectors)
+            scalar_product /= np.sqrt(np.mean(scalar_product**2))
+            basis_change = np.real(scipy.linalg.sqrtm(scalar_product))
+            features = normal_vectors.dot(basis_change)
 
             kmeans = KMeans(self.K, n_init=100, random_state=self.seed)
-            kmeans.fit(hyperplanes)
+            kmeans.fit(features)
             cluster_assignments = kmeans.labels_
 
         for iteration in range(iterations):
