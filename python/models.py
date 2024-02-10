@@ -587,10 +587,18 @@ class SingleClusterModel:
         errors = [self.model.addVar(lb=0) for _ in range(P)]
         for x, y, err in zip(X, Y, errors):
             x_utility = grb.quicksum(
-                [coef * value for coef, value in zip(x, utilities)]
+                [
+                    coef * value
+                    for coef, value in zip(x, utilities)
+                    if abs(coef) >= 1e-13
+                ]
             )
             y_utility = grb.quicksum(
-                [coef * value for coef, value in zip(y, utilities)]
+                [
+                    coef * value
+                    for coef, value in zip(y, utilities)
+                    if abs(coef) >= 1e-13
+                ]
             )
             self.model.addConstr(x_utility + err >= y_utility + self.epsilon)
 
