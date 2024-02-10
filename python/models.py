@@ -770,7 +770,7 @@ class KMeansModel(BaseModel):
             X_bar = as_barycenters(X, criteria_min, criteria_max, 5)
             Y_bar = as_barycenters(Y, criteria_min, criteria_max, 5)
 
-            kernel_basis = np.linalg.svd(np.ones((1, L + 1))).Vh[1:]
+            kernel_basis = np.linalg.svd(np.ones((1, self.L + 1))).Vh[1:]
             X_free = X_bar.dot(kernel_basis.T).reshape((-1, 50))
             Y_free = Y_bar.dot(kernel_basis.T).reshape((-1, 50))
 
