@@ -792,8 +792,8 @@ class IterativeModel(BaseModel):
 
     def __init__(
         self,
-        n_pieces,
         n_clusters,
+        n_pieces=5,
         mode="utilities",
         *,
         iterations=20,
