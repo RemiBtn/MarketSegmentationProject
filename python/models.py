@@ -1,4 +1,5 @@
 import math
+import multiprocessing
 import pickle
 from abc import abstractmethod
 
@@ -617,6 +618,13 @@ class SingleClusterModel:
         self.store_result()
 
 
+def f(args):
+    n, L, criteria_min, criteria_max, x, y = args
+    model = SingleClusterModel(n, L, criteria_min, criteria_max)
+    model.fit(x, y)
+    return model.result
+
+
 class ClusterModel(BaseModel):
     """Skeleton of MIP you have to write as the first exercise.
     You have to encapsulate your code within this class that will be called for evaluation.
@@ -634,7 +642,29 @@ class ClusterModel(BaseModel):
     def instantiate(self):
         return
 
-    def fit_with_labels(self, X, Y, labels):
+    def fit_parallel(self, X, Y, labels):
+        all_elements = np.concatenate([X, Y], axis=0)
+        self.criteria_min = all_elements.min(axis=0)
+        self.criteria_max = all_elements.max(axis=0)
+
+        f_args = [
+            (
+                X.shape[1],
+                self.L,
+                np.copy(self.criteria_min),
+                np.copy(self.criteria_max),
+                np.ascontiguousarray(X[labels == k]),
+                np.ascontiguousarray(Y[labels == k]),
+            )
+            for k in range(self.K)
+        ]
+
+        with multiprocessing.Pool(self.K) as p:
+            results = list(p.map(f, f_args))
+
+        self.result = np.stack(results, axis=0)
+
+    def fit_with_labels(self, X, Y, labels, parallel=True):
         """Estimation of the parameters - To be completed.
 
         Parameters
@@ -644,6 +674,10 @@ class ClusterModel(BaseModel):
         Y: np.ndarray
             (n_samples, n_features) features of unchosen elements
         """
+        if parallel:
+            self.fit_parallel(X, Y, labels)
+            return
+
         all_elements = np.concatenate([X, Y], axis=0)
         self.criteria_min = all_elements.min(axis=0)
         self.criteria_max = all_elements.max(axis=0)
