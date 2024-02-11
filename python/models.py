@@ -617,6 +617,65 @@ class SingleClusterModel:
         self.store_result()
 
 
+class ClusterModel(BaseModel):
+    """Skeleton of MIP you have to write as the first exercise.
+    You have to encapsulate your code within this class that will be called for evaluation.
+    """
+
+    def __init__(self, n_pieces, n_clusters, criteria_min, criteria_max):
+        """Initialization of the Heuristic Model."""
+        self.L = n_pieces
+        self.K = n_clusters
+        self.criteria_min = criteria_min
+        self.criteria_max = criteria_max
+        self.result = None
+        self.models = []
+
+    def instantiate(self):
+        return
+
+    def fit_with_labels(self, X, Y, labels):
+        """Estimation of the parameters - To be completed.
+
+        Parameters
+        ----------
+        X: np.ndarray
+            (n_samples, n_features) features of elements preferred to Y elements
+        Y: np.ndarray
+            (n_samples, n_features) features of unchosen elements
+        """
+        all_elements = np.concatenate([X, Y], axis=0)
+        self.criteria_min = all_elements.min(axis=0)
+        self.criteria_max = all_elements.max(axis=0)
+
+        models = [
+            SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max)
+            for _ in range(self.K)
+        ]
+
+        for k, model in enumerate(models):
+            X_k = X[labels == k]
+            Y_k = Y[labels == k]
+            model.fit(X_k, Y_k)
+
+        self.result = np.stack([model.result for model in models], axis=0)
+
+    def predict_utility(self, X):
+        """Return Decision Function of the MIP for X. - To be completed.
+
+        Parameters:
+        -----------
+        X: np.ndarray
+            (n_samples, n_features) list of features of elements
+
+        Returns
+        -------
+        np.ndarray:
+            (n_samples, n_clusters) array of decision function value for each cluster.
+        """
+        return compute_scores(self.result, X, self.criteria_min, self.criteria_max)
+
+
 class KMeansModel(BaseModel):
     """Skeleton of MIP you have to write as the first exercise.
     You have to encapsulate your code within this class that will be called for evaluation.
@@ -648,36 +707,83 @@ class KMeansModel(BaseModel):
         all_elements = np.concatenate([X, Y], axis=0)
         criteria_min = all_elements.min(axis=0)
         criteria_max = all_elements.max(axis=0)
-        X_bar = as_barycenters(X, criteria_min, criteria_max, 5).reshape((-1, 60))
-        Y_bar = as_barycenters(Y, criteria_min, criteria_max, 5).reshape((-1, 60))
+        X_bar = as_barycenters(X, criteria_min, criteria_max, self.L)
+        Y_bar = as_barycenters(Y, criteria_min, criteria_max, self.L)
 
-        normal_vectors = X_bar - Y_bar
+        kernel_basis = np.linalg.svd(np.ones((1, self.L + 1))).Vh[1:]
+        X_free = X_bar.dot(kernel_basis.T).reshape((-1, self.L * self.n))
+        Y_free = Y_bar.dot(kernel_basis.T).reshape((-1, self.L * self.n))
+
+        normal_vectors = X_free - Y_free
         norms = np.linalg.norm(normal_vectors, axis=1, keepdims=True)
         normal_vectors /= norms
-        mid_points = (X_bar + Y_bar) / 2
-        constants = np.sum(normal_vectors * mid_points, axis=1, keepdims=True)
-        hyperplanes = np.hstack([normal_vectors, constants])
 
-        kmeans = KMeans(self.K, n_init=100)
-        kmeans.fit(hyperplanes)
+        scalar_product = np.einsum("ki,kj->ij", normal_vectors, normal_vectors)
+        scalar_product /= np.sqrt(np.mean(scalar_product**2))
+        basis_change = np.real(scipy.linalg.sqrtm(scalar_product))
+        features = normal_vectors.dot(basis_change)
+
+        kmeans = KMeans(self.K, n_init=100, random_state=self.seed)
+        kmeans.fit(features)
 
         all_elements = np.concatenate([X, Y], axis=0)
         self.criteria_min = all_elements.min(axis=0)
         self.criteria_max = all_elements.max(axis=0)
 
-        models = [
-            SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max)
-            for _ in range(self.K)
-        ]
+        model = ClusterModel(self.L, self.K, self.criteria_min, self.criteria_max)
+        model.fit_with_labels(X, Y, kmeans.labels_)
 
-        for k, model in enumerate(models):
-            X_k = X[kmeans.labels_ == k]
-            Y_k = Y[kmeans.labels_ == k]
-            model.fit(X_k, Y_k)
+        self.result = model.result
 
-        self.result = np.stack([model.result for model in models], axis=0)
+    def predict_utility(self, X):
+        """Return Decision Function of the MIP for X. - To be completed.
 
-    def fit_L2_iteration(self, X, Y, Z, iterations=100, h=10):
+        Parameters:
+        -----------
+        X: np.ndarray
+            (n_samples, n_features) list of features of elements
+
+        Returns
+        -------
+        np.ndarray:
+            (n_samples, n_clusters) array of decision function value for each cluster.
+        """
+        return compute_scores(self.result, X, self.criteria_min, self.criteria_max)
+
+
+class IterativeModel(BaseModel):
+    """Skeleton of MIP you have to write as the first exercise.
+    You have to encapsulate your code within this class that will be called for evaluation.
+    """
+
+    def __init__(
+        self,
+        n_pieces,
+        n_clusters,
+        mode="utilities",
+        *,
+        iterations=20,
+        h=10,
+        initialization="kmeans",
+        seed=123,
+    ):
+        """Initialization of the Heuristic Model."""
+        self.seed = seed
+        self.L = n_pieces
+        self.K = n_clusters
+        self.criteria_min = None
+        self.criteria_max = None
+        self.result = None
+        self.models = []
+        self.mode = mode
+        self.iterations = iterations
+        self.h = h
+        self.initialization = initialization
+
+    def instantiate(self):
+        return
+
+    def fit(self, X, Y):
         """Estimation of the parameters - To be completed.
 
         Parameters
@@ -687,9 +793,33 @@ class KMeansModel(BaseModel):
         Y: np.ndarray
             (n_samples, n_features) features of unchosen elements
         """
+
+        if self.mode not in {"utilities", "l2"}:
+            raise ValueError
+        if self.mode == "utilities":
+            self.fit_utilities_iteration(
+                X, Y, None, self.iterations, self.initialization
+            )
+        elif self.mode == "l2":
+            self.fit_L2_iteration(X, Y, None, self.iterations, self.h)
+
+    def fit_L2_iteration(self, X, Y, Z, iterations=None, h=None):
+        """Estimation of the parameters - To be completed.
+
+        Parameters
+        ----------
+        X: np.ndarray
+            (n_samples, n_features) features of elements preferred to Y elements
+        Y: np.ndarray
+            (n_samples, n_features) features of unchosen elements
+        """
+        if iterations is None:
+            iterations = self.iterations
+        if h is None:
+            h = self.h
         pairs_explained = metrics.PairsExplained()
         cluster_intersection = metrics.ClusterIntersection()
-        data = np.concatenate([X, Y], axis=1)
+
         utilities_X, utilities_Y = np.zeros((X.shape[0], self.K)), np.zeros(
             (X.shape[0], self.K)
         )
@@ -697,12 +827,10 @@ class KMeansModel(BaseModel):
         all_elements = np.concatenate([X, Y], axis=0)
         self.criteria_min = all_elements.min(axis=0)
         self.criteria_max = all_elements.max(axis=0)
-        models = [
-            SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max)
-            for _ in range(self.K)
-        ]
 
         print(f"Utility difference hyperparameter h={h}")
+
+        best_score = -1
 
         for iteration in range(iterations):
             data = np.concatenate([X, Y, h * utility_diffs], axis=1)
@@ -710,36 +838,40 @@ class KMeansModel(BaseModel):
             kmeans = KMeans(self.K, random_state=self.seed)
             kmeans.fit(data)
 
-            for k, model in enumerate(models):
-                X_k = X[kmeans.labels_ == k]
-                Y_k = Y[kmeans.labels_ == k]
-                model.fit(X_k, Y_k)
+            model = ClusterModel(self.L, self.K, self.criteria_min, self.criteria_max)
+            model.fit_with_labels(X, Y, kmeans.labels_)
 
-            self.result = np.stack([model.result for model in models], axis=0)
+            score = 100 * pairs_explained.from_model(model, X, Y)
+            if score >= best_score:
+                self.result = model.result
+                best_score = score
 
             print(
-                f"iteration {iteration} - Percentage of explained preferences :{100 * pairs_explained.from_model(self, X, Y)}"
+                f"iteration {iteration} - Percentage of explained preferences: {score}"
             )
-            print(
-                f"iteration {iteration} - Percentage of preferences well regrouped into clusters: {100 * cluster_intersection.from_model(self, X, Y, Z)}"
-            )
+            if Z is not None:
+                print(
+                    f"iteration {iteration} - Percentage of preferences well regrouped into clusters: {100 * cluster_intersection.from_model(model, X, Y, Z)}"
+                )
 
             utilities_X = self.predict_utility(X)
             utilities_Y = self.predict_utility(Y)
             utility_diffs = utilities_X - utilities_Y
 
-    def fit_utilities_iteration(
-        self, X, Y, Z, iterations=100, initialization="randomXY"
-    ):
+    def fit_utilities_iteration(self, X, Y, Z, iterations=None, initialization=None):
         # Initialize random cluster and iterate to class custer according to the max of utility difference
         self.n = X.shape[1]
         all_elements = np.concatenate([X, Y], axis=0)
         self.criteria_min = all_elements.min(axis=0)
         self.criteria_max = all_elements.max(axis=0)
-        models = [
-            SingleClusterModel(X.shape[1], self.L, self.criteria_min, self.criteria_max)
-            for _ in range(self.K)
-        ]
+
+        if iterations is None:
+            iterations = self.iterations
+        if initialization is None:
+            initialization = self.initialization
+
+        pairs_explained = metrics.PairsExplained()
+        cluster_intersection = metrics.ClusterIntersection()
 
         if initialization == "randomXY":
             utilities_X, utilities_Y = np.random.rand(
@@ -764,7 +896,7 @@ class KMeansModel(BaseModel):
             utility_diffs = utilities_X - utilities_Y
             cluster_assignments = np.argmax(utility_diffs, axis=1)
 
-        elif initialization == "random_kmeans":
+        elif initialization == "kmeans":
             all_elements = np.concatenate([X, Y], axis=0)
             criteria_min = all_elements.min(axis=0)
             criteria_max = all_elements.max(axis=0)
@@ -787,27 +919,37 @@ class KMeansModel(BaseModel):
             kmeans = KMeans(self.K, n_init=100, random_state=self.seed)
             kmeans.fit(features)
             cluster_assignments = kmeans.labels_
+        else:
+            raise ValueError
 
-        for iteration in range(iterations):
-            for k, model in enumerate(models):
-                X_k = X[cluster_assignments == k]
-                Y_k = Y[cluster_assignments == k]
-                model.fit(X_k, Y_k)
+        best_score = -1
+        previous = np.copy(cluster_assignments)
 
-            self.result = np.stack([model.result for model in models], axis=0)
+        for iteration in range(iterations + 1):
+            model = ClusterModel(self.L, self.K, self.criteria_min, self.criteria_max)
+            model.fit_with_labels(X, Y, cluster_assignments)
 
-            utilities_X, utilities_Y = self.predict_utility(X), self.predict_utility(Y)
+            score = 100 * pairs_explained.from_model(model, X, Y)
+            if score >= best_score:
+                self.result = model.result
+                best_score = score
+
+            print(
+                f"iteration {iteration} - Percentage of explained preferences: {score}"
+            )
+            if Z is not None:
+                print(
+                    f"iteration {iteration} - Percentage of preferences well regrouped into clusters: {100 * cluster_intersection.from_model(model, X, Y, Z)}"
+                )
+
+            utilities_X = model.predict_utility(X)
+            utilities_Y = model.predict_utility(Y)
             utility_diffs = utilities_X - utilities_Y
 
             cluster_assignments = np.argmax(utility_diffs, axis=1)
-
-            # Log des performances à chaque itération
-            print(
-                f"iteration {iteration} - Percentage of explained preferences: {100 * metrics.PairsExplained().from_model(self, X, Y)}"
-            )
-            print(
-                f"iteration {iteration} - Percentage of preferences well regrouped into clusters: {100 * metrics.ClusterIntersection().from_model(self, X, Y, Z)}"
-            )
+            if np.all(cluster_assignments == previous):
+                break
+            previous = np.copy(cluster_assignments)
 
     def predict_utility(self, X):
         """Return Decision Function of the MIP for X. - To be completed.
@@ -823,3 +965,6 @@ class KMeansModel(BaseModel):
             (n_samples, n_clusters) array of decision function value for each cluster.
         """
         return compute_scores(self.result, X, self.criteria_min, self.criteria_max)
+
+
+HeuristicModel = IterativeModel
