@@ -548,7 +548,7 @@ class SubsetModel(BaseModel):
 
 class SingleClusterModel:
     def __init__(
-        self, n_features, n_pieces, criteria_min, criteria_max, *, epsilon=0.0001
+        self, n_features, n_pieces, criteria_min, criteria_max, *, epsilon=0.00001
     ):
         self.n = n_features
         self.L = n_pieces
@@ -732,6 +732,7 @@ class KMeansModel(BaseModel):
         self, X, Y, Z, iterations=100, initialization="randomXY"
     ):
         # Initialize random cluster and iterate to class custer according to the max of utility difference
+        self.n = X.shape[1]
         all_elements = np.concatenate([X, Y], axis=0)
         self.criteria_min = all_elements.min(axis=0)
         self.criteria_max = all_elements.max(axis=0)
@@ -767,12 +768,12 @@ class KMeansModel(BaseModel):
             all_elements = np.concatenate([X, Y], axis=0)
             criteria_min = all_elements.min(axis=0)
             criteria_max = all_elements.max(axis=0)
-            X_bar = as_barycenters(X, criteria_min, criteria_max, 5)
-            Y_bar = as_barycenters(Y, criteria_min, criteria_max, 5)
+            X_bar = as_barycenters(X, criteria_min, criteria_max, self.L)
+            Y_bar = as_barycenters(Y, criteria_min, criteria_max, self.L)
 
             kernel_basis = np.linalg.svd(np.ones((1, self.L + 1))).Vh[1:]
-            X_free = X_bar.dot(kernel_basis.T).reshape((-1, 50))
-            Y_free = Y_bar.dot(kernel_basis.T).reshape((-1, 50))
+            X_free = X_bar.dot(kernel_basis.T).reshape((-1, self.L * self.n))
+            Y_free = Y_bar.dot(kernel_basis.T).reshape((-1, self.L * self.n))
 
             normal_vectors = X_free - Y_free
             norms = np.linalg.norm(normal_vectors, axis=1, keepdims=True)
